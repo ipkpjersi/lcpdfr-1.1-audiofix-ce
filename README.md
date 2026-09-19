@@ -41,8 +41,18 @@ assemblies.
 The build verifies what it produced rather than trusting it, and knows the stock DLL's hash
 so `--restore` cannot hand back one of its own builds by mistake.
 
-`collect-resources.py` extracts the resources the build needs from the installed assembly;
-`ResxCompile.cs` and `VerifyBuild.cs` are small helpers used by `build.sh`.
+`collect-resources.py` compiles the embedded resources the build needs. Without them the
+build compiles but throws `MissingManifestResourceException` at runtime, because
+`CultureHelper` and the WinForms designers look their resources up by name. It reads the
+`.resx` files from the upstream source clone and compiles them with `ResxCompile.exe`
+rather than `resgen`, which drops external file references and gets line endings wrong.
+The manifest name is the root namespace plus the project-relative path with separators
+turned into dots, which is what the compiled code expects. The shipped DLL's resource names
+are obfuscated; a local build's are not, so the natural names are the correct ones.
+
+You do not need to do any of that by hand. `build.sh` runs it, and the generated `res/`
+folder is gitignored as build output. `ResxCompile.cs` and `VerifyBuild.cs` are small
+helpers it compiles and uses.
 
 Note that every build produces a different hash: `mcs` stamps a fresh MVID into each
 assembly, so even a comment-only edit changes it. The patched build identifies itself with
@@ -55,8 +65,8 @@ permits use, execution and derivative works, and it *requires* that derivative w
 made available publicly, free of charge, under the same licence. It does not permit
 distributing compiled binaries without explicit permission.
 
-This repository therefore contains source only. `LCPD First Response.dll` and the extracted
-`res/` resources are deliberately excluded and gitignored. `LICENSE.md` carries the
+This repository therefore contains source only. `LCPD First Response.dll` is deliberately
+excluded and gitignored, as is the generated `res/` folder, which is build output. `LICENSE.md` carries the
 upstream licence text in full, including the SlimDX, Lidgren, protobuf-net and Hazard
 notices it incorporates, as the licence requires.
 
