@@ -31,8 +31,18 @@ sound, buffers are disposed, and both wait loops get timeouts.
 
 ## Building
 
-Requires `git`, `mcs` (mono-devel), and an installed LCPDFR 1.1 for its reference
-assemblies.
+Requires `git`, `mcs` and `resgen` (mono-devel), and an **installed LCPDFR 1.1**, because
+every reference assembly comes from the install rather than from this repository:
+
+    AdvancedHook.dll                              Lidgren.Network.dll
+    Newtonsoft.Json.dll                           protobuf-net.dll
+    SlimDX.dll                                    LCPDFR.Networking.dll
+    scripts/LCPDFR Loader.net.dll                 LCPDFR/API Example/References/ScriptHookDotNet.dll
+
+plus `System.Speech.dll` from the Wine prefix, so .NET 4 must be installed there. The
+script checks all of them up front and names whichever is missing.
+
+The source itself is cloned from upstream automatically; nothing is vendored here.
 
     ./build.sh                 # clone, patch, build into this directory
     ./build.sh --install       # also swap it into the game, backing up the original
@@ -66,9 +76,9 @@ made available publicly, free of charge, under the same licence. It does not per
 distributing compiled binaries without explicit permission.
 
 This repository therefore contains source only. `LCPD First Response.dll` is deliberately
-excluded and gitignored, as is the generated `res/` folder, which is build output. `LICENSE.md` carries the
-upstream licence text in full, including the SlimDX, Lidgren, protobuf-net and Hazard
-notices it incorporates, as the licence requires.
+excluded and gitignored, as is the generated `res/` folder, which is build output.
+`LICENSE.md` carries the upstream licence text in full, including the SlimDX, Lidgren,
+protobuf-net and Hazard notices it incorporates, as the licence requires.
 
 Upstream source: https://github.com/LMSDev/lcpdfr_public
 
