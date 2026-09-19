@@ -1,0 +1,141 @@
+diff --git a/LCPD First Response/Engine/IO/SoundEngine.cs b/LCPD First Response/Engine/IO/SoundEngine.cs
+index 8579bcb..d85b844 100644
+--- a/LCPD First Response/Engine/IO/SoundEngine.cs	
++++ b/LCPD First Response/Engine/IO/SoundEngine.cs	
+@@ -1,4 +1,4 @@
+-﻿namespace LCPD_First_Response.Engine.IO
++namespace LCPD_First_Response.Engine.IO
+ {
+     using System;
+     using System.Collections.Generic;
+@@ -31,6 +31,54 @@
+         /// </summary>
+         private static int volume;
+ 
++        /// <summary>
++        /// The single DirectSound device shared by every sound.
++        /// </summary>
++        /// <remarks>
++        /// Originally a new DirectSound was constructed for every sound played and never
++        /// disposed. Each one is a WASAPI endpoint under Wine and keeps a mixer thread
++        /// alive, and each thread reserves about 1 MB of address space. In a 32-bit
++        /// process that exhausts the address space after roughly 330 sounds, which was a
++        /// hard crash inside ntdll, and before that it exhausted PipeWire's descriptors.
++        /// One device for the whole process removes the leak at its source.
++        /// </remarks>
++        private static DirectSound sharedDevice;
++
++        /// <summary>
++        /// Guards creation of <see cref="sharedDevice"/>, which is reached from several
++        /// audio threads.
++        /// </summary>
++        private static readonly object sharedDeviceLock = new object();
++
++        /// <summary>
++        /// How long to wait for a buffer to start or finish before giving up.
++        /// </summary>
++        /// <remarks>
++        /// Both waits below were untimed. A buffer that never reaches Playing, which is
++        /// what happens when the audio device is unhealthy, wedged the calling thread for
++        /// the rest of the session. On a background thread that silently killed all audio,
++        /// because AudioHelper's busy flag was never reset; on the script thread it froze
++        /// the game.
++        /// </remarks>
++        private const int PlaybackWaitTimeoutMilliseconds = 5000;
++
++        /// <summary>
++        /// Returns the shared DirectSound device, creating it on first use.
++        /// </summary>
++        private static DirectSound GetSharedDevice()
++        {
++            lock (sharedDeviceLock)
++            {
++                if (sharedDevice == null)
++                {
++                    sharedDevice = new DirectSound();
++                    sharedDevice.SetCooperativeLevel(System.Diagnostics.Process.GetCurrentProcess().MainWindowHandle, CooperativeLevel.Priority);
++                }
++
++                return sharedDevice;
++            }
++        }
++
+         /// <summary>
+         /// Initializes static members of the <see cref="SoundEngine"/> class.
+         /// </summary>
+@@ -81,8 +129,7 @@
+             Log.Debug("PlayExternalSound: Playing " + path, "SoundEngine");
+ 
+             // Create direct sound object
+-            DirectSound directSound = new DirectSound();
+-            directSound.SetCooperativeLevel(System.Diagnostics.Process.GetCurrentProcess().MainWindowHandle, CooperativeLevel.Priority);
++            DirectSound directSound = GetSharedDevice();
+ 
+             // Read wave file
+             Stream waveFileStream;
+@@ -144,9 +191,20 @@
+                     secondarySoundBuffer.Play(0, PlayFlags.None);
+                 }
+ 
++                // A looping sound is meant to play until something calls Stop on it, so
++                // this wait is unbounded for loops by design. Only non-looping sounds get
++                // a timeout: those should finish on their own, and one that never does is
++                // the wedge this patch exists to prevent.
++                int waited = 0;
+                 while (secondarySoundBuffer.Status.HasFlag(BufferStatus.Playing))
+                 {
+                     Thread.Sleep(1);
++                    waited++;
++                    if (!loop && waited > PlaybackWaitTimeoutMilliseconds)
++                    {
++                        Log.Warning("PlayExternalSound: timed out waiting for playback to end", "SoundEngine");
++                        break;
++                    }
+                 }
+ 
+                 stream.Close();
+@@ -155,10 +213,18 @@
+             });
+             fillBuffer.Start();
+ 
+-            // Dont return until actually playing
++            // Dont return until actually playing, but never wait forever: a buffer that
++            // never starts used to wedge this thread for the rest of the session.
++            int startWait = 0;
+             while (!secondarySoundBuffer.Status.HasFlag(BufferStatus.Playing))
+             {
+                 Thread.Sleep(1);
++                startWait++;
++                if (startWait > PlaybackWaitTimeoutMilliseconds)
++                {
++                    Log.Warning("PlayExternalSound: timed out waiting for playback to start", "SoundEngine");
++                    break;
++                }
+             }
+ 
+             // Adjust volume
+diff --git a/LCPD First Response/LCPDFR/Main.cs b/LCPD First Response/LCPDFR/Main.cs
+index 357f675..3ea667a 100644
+--- a/LCPD First Response/LCPDFR/Main.cs	
++++ b/LCPD First Response/LCPDFR/Main.cs	
+@@ -402,6 +402,7 @@
+             Game.Console.Print("// " + CultureHelper.GetText("LCPDMAIN_SCRIPT_CONTRIBUTIONS"));
+             Game.Console.Print("// " + CultureHelper.GetText("LCPDMAIN_SPECIAL_THANKS"));
+             Game.Console.Print("// © Copyright 2010-2015, G17 Media");
++            Game.Console.Print("// Audio fix build");
+             Game.Console.Print("---------------------------------------------------------------------");
+             //Game.Console.Print("// " + string.Format(CultureHelper.GetText("LCPDMAIN_ELS"), Global.ELSInstalled));
+             Game.Console.Print("// " + string.Format(CultureHelper.GetText("LCPDMAIN_HARDMODE"), Settings.HardcoreEnabled));
+@@ -410,6 +411,12 @@
+             Log.Info("Running LCPD First Response " + Version, this);
+             Log.Info("Copyright © 2010-2015, G17 Media, www.lcpdfr.com", this);
+ 
++            // Identifies the locally patched build. The audio fixes are invisible at
++            // runtime when they work, so without this there is no way to tell from a
++            // log or the console which DLL is actually loaded. See
++            // soundengine-audio-fix.patch for what differs from stock.
++            Log.Info("Audio fix build: shared DirectSound device, bounded playback waits", this);
++
+             // Preload models if told so
+             if (Settings.PreloadAllModels)
+             {

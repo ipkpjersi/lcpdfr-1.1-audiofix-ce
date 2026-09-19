@@ -1,0 +1,20 @@
+# Build output. The LCPDFR licence forbids distributing compiled binaries, so this is
+# built locally and never committed. See README.md.
+LCPD First Response.dll
+LCPD First Response.pdb
+
+# Resources extracted from the installed LCPDFR assembly. Upstream's content, not ours,
+# and part of the compiled software the licence covers. collect-resources.py regenerates
+# them from a local install.
+res/
+
+# Clone of the upstream source, made by build.sh.
+work/
+
+# Helper executables, rebuilt from the .cs files beside them.
+*.exe
+
+# Response files build.sh generates for mcs. Regenerated every build, and the resources
+# one carries absolute local paths.
+.sources.rsp
+.resources.rsp
