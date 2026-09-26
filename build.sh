@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
 #
-# build.sh - build LCPDFR 1.1 from public source with the audio leak fixed.
+# build.sh - build LCPDFR 1.1 from public source for GTA IV: Complete Edition.
 #
-# LCPDFR's SoundEngine constructs a DirectSound device for every sound played and never
-# disposes it. Under Wine each device is a WASAPI endpoint that keeps a mixer thread alive,
-# and each thread reserves about 1 MB of address space. In a 32-bit process that exhausts
-# the address space after roughly 330 sounds and crashes inside ntdll. Two untimed wait
-# loops in the same method also wedge whichever thread calls them when a buffer never
-# starts, which silently kills all audio or freezes the game.
+# The Complete Edition fork of lcpdfr-1.1-audiofix. It builds against the Complete Edition
+# install (1.2.0.59 with LCPDFR 1.1 Legacy Edition, whose LCPD First Response.dll is
+# byte-identical to non-Legacy 1.1's) and applies these patches to LMS's public source:
 #
-# This builds a copy with all three fixed, from LMS's public source plus
-# soundengine-audio-fix.patch in this directory. See TODO.md item 2.
+#   soundengine-audio-fix.patch   the DirectSound device leak and two untimed waits, as in
+#                                 lcpdfr-1.1-audiofix. See TODO.md item 2.
+#
+# See TODO.md item 5.
 #
 # LICENSING. The LCPDFR source is under an altered Boost licence that permits use,
 # execution and derivative works, but **forbids distributing the compiled binary**. So this
 # builds locally and the DLL is never committed or shipped. The patch itself is source and
 # is kept here, which the licence requires of derivative works.
 #
-# Requires: git, mcs (mono-devel), and an installed LCPDFR 1.1 for the reference assemblies.
+# Requires: git, mcs (mono-devel), and LCPDFR 1.1 Legacy installed on Complete Edition for
+# the reference assemblies.
 #
 #   ./build.sh                 # clone, patch, build into this directory
 #   ./build.sh --install       # also swap it into the game, backing up the original
@@ -32,26 +32,11 @@ MODDING_DIR="$(cd "$HERE/../.." && pwd)"
 # manifest, so neither drive names nor an appid need to be written down here.
 . "$MODDING_DIR/lib/common.sh"
 
-# The Original Edition runs as a non-Steam shortcut, so Steam generates its appid per
-# machine and there is no name to look it up by. Identify the prefix by what is inside it
-# instead: GTA IV's own AppData folder, which only a launched game creates. Newest first,
-# so a stale prefix from an earlier shortcut does not win.
-find_oe_prefix() {
-    local root pfx
-    for root in "${STEAM_LIB_ROOTS[@]}"; do
-        [ -d "$root/steamapps/compatdata" ] || continue
-        while IFS= read -r pfx; do
-            [ -d "$pfx/drive_c/users/steamuser/AppData/Local/Rockstar Games/GTA IV" ] || continue
-            echo "$pfx"
-            return 0
-        done < <(find "$root/steamapps/compatdata" -mindepth 2 -maxdepth 2 -type d -name pfx \
-                      -printf '%T@\t%p\n' 2>/dev/null | sort -rn | cut -f2-)
-    done
-    return 1
-}
+# Complete Edition is a Steam game with a fixed appid, so its prefix is found by that.
+CE_APPID=12210
 
-GAME_DIR="${GAME_DIR:-$STEAM_COMMON/Grand Theft Auto IV - Original Edition/GTAIV}"
-PREFIX="${PREFIX:-$(find_oe_prefix || true)}"
+GAME_DIR="${GAME_DIR:-$STEAM_COMMON/Grand Theft Auto IV/GTAIV}"
+PREFIX="${PREFIX:-$(find_prefix "$CE_APPID" || true)/pfx}"
 REPO="https://github.com/LMSDev/lcpdfr_public.git"
 WORK="$HERE/work"
 TARGET="$GAME_DIR/LCPD First Response.dll"
@@ -106,7 +91,7 @@ SPEECH="$PREFIX/drive_c/windows/Microsoft.NET/assembly/GAC_MSIL/System.Speech/v4
 for dll in "AdvancedHook.dll" "Lidgren.Network.dll" "Newtonsoft.Json.dll" "protobuf-net.dll" \
            "SlimDX.dll" "LCPDFR.Networking.dll" "scripts/LCPDFR Loader.net.dll" \
            "LCPDFR/API Example/References/ScriptHookDotNet.dll"; do
-    [ -f "$GAME_DIR/$dll" ] || die "missing reference: $GAME_DIR/$dll (install LCPDFR 1.1 first)"
+    [ -f "$GAME_DIR/$dll" ] || die "missing reference: $GAME_DIR/$dll (run setup-complete-edition.sh --with-lcpdfr first)"
 done
 
 if [ ! -d "$WORK/.git" ]; then
@@ -118,9 +103,11 @@ else
     git -C "$WORK" checkout -- . 2>/dev/null || true
 fi
 
-echo "applying soundengine-audio-fix.patch..."
-git -C "$WORK" apply "$HERE/soundengine-audio-fix.patch" \
-    || die "patch did not apply; upstream source may have changed"
+for patch in soundengine-audio-fix.patch; do
+    echo "applying $patch..."
+    git -C "$WORK" apply "$HERE/$patch" \
+        || die "$patch did not apply; upstream source may have changed"
+done
 
 # The project's own file list, rather than every .cs on disk: the repo contains stray files
 # that were never part of the build and do not compile, such as a second KeyHandler.cs and
@@ -136,6 +123,18 @@ PY
 
 # Embedded resources: translations, form layouts, images. Without them the build compiles
 # but throws MissingManifestResourceException at runtime. See collect-resources.py.
+# The two helpers are gitignored build output (*.exe), so a fresh clone has neither. Compile
+# each from its .cs when missing or older than the source.
+build_helper() {
+    local name="$1"; shift
+    local exe="$HERE/$name.exe"
+    if [ ! -f "$exe" ] || [ "$HERE/$name.cs" -nt "$exe" ]; then
+        echo "compiling $name.exe..."
+        mcs -out:"$exe" "$@" "$HERE/$name.cs" >/dev/null || die "could not compile $name.exe"
+    fi
+}
+build_helper ResxCompile -r:System.Windows.Forms.dll
+
 echo "compiling embedded resources..."
 RESARGS="$HERE/.resources.rsp"
 command -v resgen >/dev/null || die "resgen is required (mono-devel)"
@@ -166,10 +165,11 @@ echo "built: $BUILT ($(stat -c%s "$BUILT") bytes)"
 
 # Verify the resources LCPDFR reads at runtime. Three separate failures compiled cleanly
 # and only surfaced in-game, so this checks them before the DLL can be installed.
-if [ -f "$HERE/VerifyBuild.exe" ] && command -v mono >/dev/null; then
+if command -v mono >/dev/null; then
     echo "verifying resources..."
     DNLIB=$(ls /usr/lib/mono/gac/dnlib/*/dnlib.dll 2>/dev/null | head -1)
     if [ -n "$DNLIB" ]; then
+        build_helper VerifyBuild -r:"$DNLIB"
         MONO_PATH="$(dirname "$DNLIB")" mono "$HERE/VerifyBuild.exe" "$BUILT" \
             || die "resource verification failed; not installing"
     else
