@@ -11,6 +11,10 @@
 #   helpbox-key-names.patch       key names written into help text. AdvancedHook's in-memory
 #                                 replacement text no longer lands on Complete Edition, so
 #                                 hints read "press , to open door".
+#   ped-untracked-vehicle.patch   AdvancedHook's creation and deletion hooks miss entities on
+#                                 Complete Edition. Reconciles LCPDFR's pools against the
+#                                 game's own lists every two seconds, guards the lookups that
+#                                 assumed a ped's vehicle is always tracked, and logs both.
 #
 # See TODO.md item 5.
 #
@@ -106,7 +110,7 @@ else
     git -C "$WORK" checkout -- . 2>/dev/null || true
 fi
 
-for patch in soundengine-audio-fix.patch helpbox-key-names.patch; do
+for patch in soundengine-audio-fix.patch helpbox-key-names.patch ped-untracked-vehicle.patch; do
     echo "applying $patch..."
     git -C "$WORK" apply "$HERE/$patch" \
         || die "$patch did not apply; upstream source may have changed"

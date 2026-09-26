@@ -1,0 +1,266 @@
+diff --git a/LCPD First Response/Engine/Scripting/Entities/CPed.cs b/LCPD First Response/Engine/Scripting/Entities/CPed.cs
+index 5a427ba..be49d9e 100644
+--- a/LCPD First Response/Engine/Scripting/Entities/CPed.cs	
++++ b/LCPD First Response/Engine/Scripting/Entities/CPed.cs	
+@@ -126,16 +126,66 @@
+         {
+             get
+             {
+-                CVehicle currentVehicle = base.CurrentVehicle;
++                // Same lookup as PedBase.CurrentVehicle, inlined so a ped in a vehicle the pool
++                // does not know can be told apart from a ped on foot without a second native call.
++                if (!base.IsInVehicle())
++                {
++                    return null;
++                }
++
++                GTA.Vehicle gameVehicle = this.ped.CurrentVehicle;
++                CVehicle currentVehicle = Pools.VehiclePool.GetVehicleFromPool(gameVehicle);
+                 if (currentVehicle != null)
+                 {
+                     this.lastVehicle = currentVehicle;
+                 }
++                else
++                {
++                    this.LogUntrackedVehicle(gameVehicle);
++                }
+ 
+                 return currentVehicle;
+             }
+         }
+ 
++        /// <summary>
++        /// Handles of peds already reported as sitting in a vehicle the vehicle pool does not know,
++        /// so each is logged once rather than on every lookup.
++        /// </summary>
++        private static readonly HashSet<int> pedsLoggedWithUntrackedVehicle = new HashSet<int>();
++
++        /// <summary>
++        /// Logs, once per ped, that the game has the ped in a vehicle that is not in LCPDFR's vehicle
++        /// pool, so CurrentVehicle returns null although IsInVehicle is true. On Complete Edition
++        /// this broke AimingManager and KeyBindings, which assume a vehicle is always found. Logged
++        /// to find out which vehicles the pool misses. Never throws.
++        /// </summary>
++        /// <param name="gameVehicle">The vehicle the game reports the ped to be in.</param>
++        private void LogUntrackedVehicle(GTA.Vehicle gameVehicle)
++        {
++            try
++            {
++                if (!pedsLoggedWithUntrackedVehicle.Add(this.Handle))
++                {
++                    return;
++                }
++
++                string vehicleText = "none";
++                if (gameVehicle != null)
++                {
++                    vehicleText = "handle " + gameVehicle.pHandle + ", model 0x" + gameVehicle.Model.Hash.ToString("X8")
++                        + ", exists " + gameVehicle.Exists();
++                }
++
++                Log.Warning("CurrentVehicle: ped " + this.Handle + " (" + this.Model.ModelInfo.Name + ", " + this.PedGroup
++                    + ") is in a vehicle the vehicle pool does not track: " + vehicleText
++                    + ". Pool holds " + Pools.VehiclePool.Count + " vehicles.", "CPed");
++            }
++            catch (Exception)
++            {
++            }
++        }
++
+         /// <summary>
+         /// Gets or sets a string that can contain any type of debug data, most likely changed every tick
+         /// </summary>
+@@ -1485,7 +1535,9 @@
+             if (isCop && !pedSearchCriteria.HasFlag(EPedSearchCriteria.Cops) && !pedSearchCriteria.HasFlag(EPedSearchCriteria.CopsOnly)) return false;
+             if (!isCop && pedSearchCriteria.HasFlag(EPedSearchCriteria.CopsOnly)) return false;
+ 
+-            if (ped.IsInVehicle() && ped.CurrentVehicle.IsSuspectTransporter)
++            // CurrentVehicle is null for a vehicle the pool does not track; see LogUntrackedVehicle.
++            CVehicle pedVehicle = ped.IsInVehicle() ? ped.CurrentVehicle : null;
++            if (pedVehicle != null && pedVehicle.IsSuspectTransporter)
+             {
+                 if (!pedSearchCriteria.HasFlag(EPedSearchCriteria.SuspectTransporter)) return false;
+             }
+diff --git a/LCPD First Response/Engine/Scripting/Entities/PoolUpdaterUnmanaged.cs b/LCPD First Response/Engine/Scripting/Entities/PoolUpdaterUnmanaged.cs
+index 4e9845d..77e9349 100644
+--- a/LCPD First Response/Engine/Scripting/Entities/PoolUpdaterUnmanaged.cs	
++++ b/LCPD First Response/Engine/Scripting/Entities/PoolUpdaterUnmanaged.cs	
+@@ -110,6 +110,140 @@
+                     }
+                 }
+             }
++
++            this.ReconcileWithGame();
++        }
++
++        /// <summary>
++        /// Milliseconds between reconciliations of the pools against the game's own entity lists.
++        /// </summary>
++        private const int ReconcileIntervalMs = 2000;
++
++        /// <summary>
++        /// Tick count at which the next reconciliation is due.
++        /// </summary>
++        private int nextReconcile;
++
++        /// <summary>
++        /// Vehicles and peds the creation hooks missed this session, for the log.
++        /// </summary>
++        private int missedVehiclesTotal;
++        private int missedPedsTotal;
++        private int prunedVehiclesTotal;
++
++        /// <summary>
++        /// After startup, new peds and vehicles reach the pools only through AdvancedHook's
++        /// creation hooks. On GTA IV: Complete Edition those hooks miss some, so a ped can sit in
++        /// a vehicle the pool does not know and CurrentVehicle returns null. Every couple of
++        /// seconds this walks the game's own lists through ScriptHookDotNet, as the constructor
++        /// does once at startup, adds whatever the hooks missed, prunes vehicles the game no
++        /// longer has, since the deletion hook misses as well, and logs the counts, which also
++        /// measures how far the hooks fall short. Never throws into the engine loop.
++        /// </summary>
++        private void ReconcileWithGame()
++        {
++            int now = System.Environment.TickCount;
++            if (now - this.nextReconcile < 0)
++            {
++                return;
++            }
++
++            this.nextReconcile = now + ReconcileIntervalMs;
++
++            try
++            {
++                int addedVehicles = 0;
++                System.Collections.Generic.HashSet<int> gameVehicles = new System.Collections.Generic.HashSet<int>();
++                foreach (GTA.Vehicle vehicle in GTA.World.GetAllVehicles())
++                {
++                    if (vehicle == null || !vehicle.Exists())
++                    {
++                        continue;
++                    }
++
++                    gameVehicles.Add(vehicle.pHandle);
++                    if (Pools.VehiclePool.AtVehicleHandle(vehicle.pHandle) == null)
++                    {
++                        new CVehicle(vehicle.pHandle);
++                        addedVehicles++;
++                    }
++                }
++
++                // The deletion hook misses on Complete Edition too, so vehicles the game has
++                // removed stay in the pool: 1546 entries against about 100 real vehicles after ten
++                // minutes, and the game then crashed on LCPDFR's thread reading through a null
++                // entity pointer. Drop whatever the game no longer lists, as the deleted-handles path
++                // above does. Checked against the game's list rather than with Exists(), so no native
++                // is ever called with a stale handle. GetAll() returns a copy, so removing is safe.
++                int prunedVehicles = 0;
++                foreach (CVehicle cVehicle in Pools.VehiclePool.GetAll())
++                {
++                    if (!gameVehicles.Contains(cVehicle.Handle))
++                    {
++                        Pools.VehiclePool.Remove(cVehicle);
++                        prunedVehicles++;
++                    }
++                }
++
++                // Same filters as the constructor. Checked after the vehicles, whose creation adds
++                // their occupants, so those are not counted twice.
++                int addedPeds = 0;
++                System.Collections.Generic.HashSet<int> gamePeds = new System.Collections.Generic.HashSet<int>();
++                foreach (GTA.Ped ped in GTA.World.GetAllPeds())
++                {
++                    if (ped == null || !ped.Exists())
++                    {
++                        continue;
++                    }
++
++                    gamePeds.Add(ped.pHandle);
++                    if (ped.pHandle == GTA.Game.LocalPlayer.Character.pHandle || !ped.isAliveAndWell)
++                    {
++                        continue;
++                    }
++
++                    if (Pools.PedPool.AtPedHandle(ped.pHandle) == null)
++                    {
++                        new CPed(ped.pHandle);
++                        addedPeds++;
++                    }
++                }
++
++                // Peds are only counted, not removed: their pool has stayed at a normal size, so
++                // there is no evidence the ped deletion hook misses, and removing a ped a script
++                // still holds is riskier than a vehicle.
++                int stalePeds = 0;
++                foreach (CPed cPed in Pools.PedPool.GetAll())
++                {
++                    if (!gamePeds.Contains(cPed.Handle))
++                    {
++                        stalePeds++;
++                    }
++                }
++
++                if (addedVehicles > 0 || addedPeds > 0 || prunedVehicles > 0)
++                {
++                    this.missedVehiclesTotal += addedVehicles;
++                    this.missedPedsTotal += addedPeds;
++                    this.prunedVehiclesTotal += prunedVehicles;
++                    Log.Warning("ReconcileWithGame: creation hooks missed " + addedVehicles + " vehicle(s) and " + addedPeds
++                        + " ped(s), added now; pruned " + prunedVehicles + " vehicle(s) the game no longer has. Session total: "
++                        + this.missedVehiclesTotal + " vehicle(s) and " + this.missedPedsTotal + " ped(s) added, "
++                        + this.prunedVehiclesTotal + " vehicle(s) pruned. Pools hold " + Pools.VehiclePool.Count + " vehicles (game "
++                        + gameVehicles.Count + "), " + Pools.PedPool.Count + " peds (game " + gamePeds.Count + ", " + stalePeds
++                        + " not in game).", "PoolUpdater");
++                }
++            }
++            catch (System.Exception exception)
++            {
++                try
++                {
++                    Log.Warning("ReconcileWithGame: failed, will retry: " + exception.Message, "PoolUpdater");
++                }
++                catch (System.Exception)
++                {
++                }
++            }
+         }
+ 
+         private void Hook()
+diff --git a/LCPD First Response/LCPDFR/Scripts/AimingManager.cs b/LCPD First Response/LCPDFR/Scripts/AimingManager.cs
+index ca3f986..240bd92 100644
+--- a/LCPD First Response/LCPDFR/Scripts/AimingManager.cs	
++++ b/LCPD First Response/LCPDFR/Scripts/AimingManager.cs	
+@@ -189,7 +189,8 @@
+                                     if (!targetedPed.Wanted.IsBeingArrestedByPlayer && !targetedPed.Wanted.IsBeingFrisked)
+                                     {
+                                         // If in vehicle and doing less than 5, show option to leave vehicle
+-                                        if (targetedPed.IsInVehicle && targetedPed.CurrentVehicle.Speed < 5)
++                                        // CurrentVehicle is null for a vehicle the pool does not track; such a ped gets the on-foot options.
++                                        if (targetedPed.IsInVehicle && targetedPed.CurrentVehicle != null && targetedPed.CurrentVehicle.Speed < 5)
+                                         {
+                                             if (targetedPed.PedData.Persona.Gender == Gender.Male)
+                                             {
+@@ -423,7 +424,8 @@
+                 {
+                     CPlayer.LocalPlayer.Ped.SayAmbientSpeech("GET_OUT_OF_CAR_SHOUT");
+ 
+-                    if (this.target.CurrentVehicle.Speed > 5)
++                    // An untracked vehicle cannot be checked for speed, so treat it as moving and do not order the ped out.
++                    if (this.target.CurrentVehicle == null || this.target.CurrentVehicle.Speed > 5)
+                     {
+                         return;
+                     }
+diff --git a/LCPD First Response/LCPDFR/Scripts/KeyBindings.cs b/LCPD First Response/LCPDFR/Scripts/KeyBindings.cs
+index 625a338..44b359d 100644
+--- a/LCPD First Response/LCPDFR/Scripts/KeyBindings.cs	
++++ b/LCPD First Response/LCPDFR/Scripts/KeyBindings.cs	
+@@ -348,7 +348,8 @@
+                     {
+                         if (suspect.IsInVehicle)
+                         {
+-                            if (suspect.CurrentVehicle.Model.IsBike)
++                            // CurrentVehicle is null for a vehicle the pool does not track; treat it as not a bike.
++                            if (suspect.CurrentVehicle != null && suspect.CurrentVehicle.Model.IsBike)
+                             {
+                                 CPlayer.LocalPlayer.Ped.SayAmbientSpeech("SUSPECT_IS_ON_BIKE");
+                             }

@@ -19,6 +19,7 @@ yourself; everything needed to do that is in this repository.
 |---|---|
 | `soundengine-audio-fix.patch` | The DirectSound device leak and two untimed waits, as in lcpdfr-1.1-audiofix |
 | `helpbox-key-names.patch` | Help boxes showing `,` and `.` instead of the real keys |
+| `ped-untracked-vehicle.patch` | Hotkeys and aiming dying mid-session on a ped whose vehicle LCPDFR does not track |
 
 `build.sh` applies them in that order.
 
@@ -60,6 +61,55 @@ version once and keeps the original path on 1.0.x, so the DLL stays harmless if 
 lands on the Original Edition. `LCPDFR.log` records which was chosen, under `TextHelper`.
 Arrow keys and controller buttons already use the game's real `PAD_` icons and are not
 touched.
+
+### Peds in vehicles LCPDFR does not track
+
+`CPed.CurrentVehicle` looks the game's vehicle up in LCPDFR's own vehicle pool. On Complete
+Edition some peds are in a vehicle the pool does not hold, so `IsInVehicle` is true while
+`CurrentVehicle` is null. Code that assumed a vehicle is always found then throws, and
+LCPDFR's `ScriptManager` removes the script that threw for the rest of the session. Seen
+removing `AimingManager` (aiming interactions) and `KeyBindings` (every hotkey, Alt+E
+included).
+
+`ped-untracked-vehicle.patch` guards the places seen failing and the one other unchecked
+lookup in the same two scripts: the aimed-at ped's vehicle speed and the order to leave a
+vehicle in `AimingManager`, the suspect transporter check in `CPed.IsPedValid`, and the
+pursuit suspect's is-it-a-bike check in `KeyBindings`. It also logs each such ped once, to
+find out which vehicles the pool misses:
+
+    [WARNING] [CPed] CurrentVehicle: ped <handle> (<model>, <group>) is in a vehicle the vehicle
+    pool does not track: handle <n>, model 0x<hash>, exists <bool>. Pool holds <n> vehicles.
+
+LCPDFR reads `CurrentVehicle.` without a check in about 200 other places, so more may turn
+up; the log line is how they would be found.
+
+**The likely root cause, and a fix for it.** After startup, LCPDFR learns about new vehicles
+and peds only through AdvancedHook: `PoolUpdaterUnmanaged` hooks the game's creation
+functions with `AVehicle.HookCreateVehicle` and `APed.HookCreatePed`, then each frame adds
+whatever those report. LCPDFR's own DLL is byte-identical between the Original and Complete
+Edition packages; what differs is AdvancedHook, rebuilt for Complete Edition and documented
+by its author as having functions that "don't operate correctly due to changed offsets". A
+creation hook that misses some of Complete Edition's spawn paths would leave exactly these
+untracked vehicles.
+
+So the patch also makes `UpdatePools` reconcile the pools against the game's own lists
+through ScriptHookDotNet every two seconds, as the constructor does once at startup, adding
+anything the hooks missed and logging the count:
+
+    [WARNING] [PoolUpdater] ReconcileWithGame: creation hooks missed <n> vehicle(s) and <n>
+    ped(s), added now. Session total: <n> vehicle(s), <n> ped(s). ...
+
+They do appear, heavily: 1510 vehicles and 1213 peds missed in one ten-minute session.
+
+The deletion hook misses as well, so vehicles the game removed stayed in the pool: 1546
+entries against about 100 real vehicles, until the game crashed on LCPDFR's thread reading
+through a null entity pointer. So each pass also prunes pool vehicles the game no longer
+lists, compared against the game's own list so that no native is ever called with a stale
+handle. Peds are only counted, since their pool stays a normal size. The log line reports
+added, pruned and the pool sizes against the game's:
+
+    ... pruned <n> vehicle(s) the game no longer has. Session total: ... Pools hold <n>
+    vehicles (game <n>), <n> peds (game <n>, <n> not in game).
 
 ## Building
 
