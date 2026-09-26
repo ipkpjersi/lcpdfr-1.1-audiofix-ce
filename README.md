@@ -18,6 +18,7 @@ yourself; everything needed to do that is in this repository.
 | Patch | Fixes |
 |---|---|
 | `soundengine-audio-fix.patch` | The DirectSound device leak and two untimed waits, as in lcpdfr-1.1-audiofix |
+| `helpbox-key-names.patch` | Help boxes showing `,` and `.` instead of the real keys |
 
 `build.sh` applies them in that order.
 
@@ -43,6 +44,22 @@ every later sound is skipped, so audio dies silently for the rest of the session
 
 `soundengine-audio-fix.patch` fixes all three: the device is shared rather than created per
 sound, buffers are disposed, and both wait loops get timeouts.
+
+### Key names in help boxes
+
+LCPDFR does not draw a key name itself. `LCPDFR/GUI/TextHelper.cs` swaps `~KEY_ARREST~` in
+a hint for one of eight of the game's replay prompts, such as
+`~INPUT_FRONTEND_REPLAY_CYCLEMARKERLEFT~`, and overwrites that prompt's text in memory with
+the real key through `AdvancedHookManaged.AGame.RegisterReplacementText`. On Complete
+Edition the overwrite no longer lands, a known issue of the compatibility patch, so the
+prompt shows the replay editor's own key and hints read "press , to open door".
+
+`helpbox-key-names.patch` writes the key name into the help text instead, as plain text in
+the help box's own white, with any modifier as `Alt + E`. It still reads the game's file
+version once and keeps the original path on 1.0.x, so the DLL stays harmless if it ever
+lands on the Original Edition. `LCPDFR.log` records which was chosen, under `TextHelper`.
+Arrow keys and controller buttons already use the game's real `PAD_` icons and are not
+touched.
 
 ## Building
 

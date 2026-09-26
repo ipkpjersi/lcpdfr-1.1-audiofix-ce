@@ -8,6 +8,9 @@
 #
 #   soundengine-audio-fix.patch   the DirectSound device leak and two untimed waits, as in
 #                                 lcpdfr-1.1-audiofix. See TODO.md item 2.
+#   helpbox-key-names.patch       key names written into help text. AdvancedHook's in-memory
+#                                 replacement text no longer lands on Complete Edition, so
+#                                 hints read "press , to open door".
 #
 # See TODO.md item 5.
 #
@@ -103,7 +106,7 @@ else
     git -C "$WORK" checkout -- . 2>/dev/null || true
 fi
 
-for patch in soundengine-audio-fix.patch; do
+for patch in soundengine-audio-fix.patch helpbox-key-names.patch; do
     echo "applying $patch..."
     git -C "$WORK" apply "$HERE/$patch" \
         || die "$patch did not apply; upstream source may have changed"

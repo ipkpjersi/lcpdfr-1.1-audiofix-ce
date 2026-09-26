@@ -1,0 +1,88 @@
+diff --git a/LCPD First Response/LCPDFR/GUI/TextHelper.cs b/LCPD First Response/LCPDFR/GUI/TextHelper.cs
+index df29ac8..da34c20 100644
+--- a/LCPD First Response/LCPDFR/GUI/TextHelper.cs	
++++ b/LCPD First Response/LCPDFR/GUI/TextHelper.cs	
+@@ -18,6 +18,14 @@
+     /// </summary>
+     internal class TextHelper
+     {
++        /// <summary>
++        /// Whether key names can be written into the game's text memory through AdvancedHook.
++        /// On GTA IV: Complete Edition (1.2.x) the replacement text no longer lands, so the
++        /// borrowed replay prompts show their own keys instead, such as "," and ".". There the
++        /// key name is written into the help text directly.
++        /// </summary>
++        private static readonly bool canReplaceKeyText = !IsCompleteEdition();
++
+         /// <summary>
+         /// Gets a value indicating whether a helpbox is being displayed.
+         /// </summary>
+@@ -162,6 +170,14 @@
+                             // Localize
+                             newText = LocalizeKey(newText);
+ 
++                            // On Complete Edition, write the key name into the text itself
++                            if (!canReplaceKeyText)
++                            {
++                                string keyText = key.HasModifierKeys ? GetStringRepresentationOfModifierKeys(key) + " + " + newText : newText;
++                                text = text.Replace("~KEY_" + keyName + "~", keyText);
++                                continue;
++                            }
++
+                             // For every string we have to replace, we take another ingame value
+                             string replaceString = keysUsedToReplace[stringsReplaced];
+                             int id = keysUsedToReplaceDic[replaceString];
+@@ -199,6 +215,12 @@
+                     else
+                     {
+                         // Not a registered key, so simply write text
++                        if (!canReplaceKeyText)
++                        {
++                            text = text.Replace("~KEY_" + keyName + "~", keyName);
++                            continue;
++                        }
++
+                         // For every string we have to replace, we take another ingame value
+                         string replaceString = keysUsedToReplace[stringsReplaced];
+                         int id = keysUsedToReplaceDic[replaceString];
+@@ -234,6 +256,40 @@
+             Natives.SetMsgForLoadingScreen("INPUT_FRONTEND_REPLAY_CYCLEMARKERLEFT");
+         }
+ 
++        /// <summary>
++        /// Determines whether the game is GTA IV: Complete Edition, from the file version of the
++        /// running executable: 1.2.x is Complete Edition, 1.0.x is the original release.
++        /// </summary>
++        /// <returns>True on Complete Edition. False otherwise, or if the version cannot be read.</returns>
++        private static bool IsCompleteEdition()
++        {
++            // This runs from a static initializer, where an escaping exception would make the
++            // whole class unusable, so nothing here is allowed to throw, logging included.
++            bool completeEdition = false;
++            string message;
++            try
++            {
++                System.Diagnostics.FileVersionInfo version = System.Diagnostics.Process.GetCurrentProcess().MainModule.FileVersionInfo;
++                completeEdition = version.FileMajorPart == 1 && version.FileMinorPart >= 2;
++                message = "Game version " + version.FileMajorPart + "." + version.FileMinorPart + "." + version.FileBuildPart + "." + version.FilePrivatePart
++                    + (completeEdition ? ", writing key names into help text" : ", using replacement text for key names");
++            }
++            catch (Exception exception)
++            {
++                message = "Could not read the game version, using replacement text for key names: " + exception.Message;
++            }
++
++            try
++            {
++                Engine.Log.Info(message, "TextHelper");
++            }
++            catch (Exception)
++            {
++            }
++
++            return completeEdition;
++        }
++
+         /// <summary>
+         /// Gets the string representation of modifier keys.
+         /// </summary>
