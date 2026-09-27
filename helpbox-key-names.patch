@@ -1,8 +1,22 @@
+diff --git a/LCPD First Response/Engine/Input/KeyWatchDog.cs b/LCPD First Response/Engine/Input/KeyWatchDog.cs
+index 1c060dd..e9ca1ec 100644
+--- a/LCPD First Response/Engine/Input/KeyWatchDog.cs	
++++ b/LCPD First Response/Engine/Input/KeyWatchDog.cs	
+@@ -129,6 +129,9 @@
+         {
+             this.isUsingController = !this.AlwaysUseKeyboardInput && Natives.IsUsingController();
+ 
++            // Keep a help box's written key names in step with the input device just read
++            LCPD_First_Response.LCPDFR.GUI.TextHelper.RefreshForInputDevice();
++
+             // Get key states
+             byte[] keyStates = new byte[256];
+             if (!GetKeyboardState(keyStates))
 diff --git a/LCPD First Response/LCPDFR/GUI/TextHelper.cs b/LCPD First Response/LCPDFR/GUI/TextHelper.cs
-index df29ac8..da34c20 100644
+index df29ac8..49ca6f9 100644
 --- a/LCPD First Response/LCPDFR/GUI/TextHelper.cs	
 +++ b/LCPD First Response/LCPDFR/GUI/TextHelper.cs	
-@@ -18,6 +18,14 @@
+@@ -18,6 +18,92 @@
      /// </summary>
      internal class TextHelper
      {
@@ -14,10 +28,99 @@ index df29ac8..da34c20 100644
 +        /// </summary>
 +        private static readonly bool canReplaceKeyText = !IsCompleteEdition();
 +
++        /// <summary>
++        /// The unformatted text of the last help box, with its ~KEY_~ placeholders, and whether it
++        /// was built for a controller. Written key names cannot follow a change of input device the
++        /// way the game's own input tokens do, so the help box is rebuilt when the device changes.
++        /// </summary>
++        private static string lastHelpBoxText;
++        private static bool lastHelpBoxForController;
++
++        /// <summary>
++        /// Tick count since which the input device has differed from the one the help box was
++        /// built for, or 0 while it has not. Debounces a device reading that flickers.
++        /// </summary>
++        private static int inputDeviceChangedSince;
++
++        /// <summary>
++        /// Milliseconds the new input device must hold before the help box is rebuilt for it.
++        /// </summary>
++        private const int InputDeviceSettleMs = 250;
++
++        /// <summary>
++        /// Rebuilds the help box on screen when the input device has changed since it was built, so
++        /// its keys switch between keyboard names and controller buttons. Only needed where key
++        /// names are written into the text; elsewhere the game redraws its input tokens itself.
++        /// Called every tick from KeyWatchDog.Update. Never throws.
++        /// </summary>
++        public static void RefreshForInputDevice()
++        {
++            if (canReplaceKeyText || lastHelpBoxText == null)
++            {
++                return;
++            }
++
++            try
++            {
++                bool usingController = Engine.Main.KeyWatchDog.IsUsingController;
++                if (usingController == lastHelpBoxForController)
++                {
++                    inputDeviceChangedSince = 0;
++                    return;
++                }
++
++                if (!IsHelpboxBeingDisplayed)
++                {
++                    // The box has gone, so there is nothing to rebuild.
++                    lastHelpBoxText = null;
++                    inputDeviceChangedSince = 0;
++                    return;
++                }
++
++                int now = Environment.TickCount;
++                if (inputDeviceChangedSince == 0)
++                {
++                    inputDeviceChangedSince = now == 0 ? 1 : now;
++                    return;
++                }
++
++                if (now - inputDeviceChangedSince < InputDeviceSettleMs)
++                {
++                    return;
++                }
++
++                inputDeviceChangedSince = 0;
++                Engine.Log.Info("Input device changed to " + (usingController ? "controller" : "keyboard") + ", rebuilding help box", "TextHelper");
++                PrintFormattedHelpBox(lastHelpBoxText, true);
++            }
++            catch (Exception exception)
++            {
++                lastHelpBoxText = null;
++                try
++                {
++                    Engine.Log.Warning("RefreshForInputDevice failed: " + exception.Message, "TextHelper");
++                }
++                catch (Exception)
++                {
++                }
++            }
++        }
++
          /// <summary>
          /// Gets a value indicating whether a helpbox is being displayed.
          /// </summary>
-@@ -162,6 +170,14 @@
+@@ -98,6 +184,10 @@
+ 
+             HelpBox.Clear();
+ 
++            // Remember the unformatted text, so RefreshForInputDevice can rebuild it for the other device
++            lastHelpBoxText = text;
++            lastHelpBoxForController = Engine.Main.KeyWatchDog.IsUsingController;
++
+             // TODO: Format text using Engine.GUI.TextBuilder
+ 
+             // Search for a key variable
+@@ -162,6 +252,14 @@
                              // Localize
                              newText = LocalizeKey(newText);
  
@@ -32,7 +135,7 @@ index df29ac8..da34c20 100644
                              // For every string we have to replace, we take another ingame value
                              string replaceString = keysUsedToReplace[stringsReplaced];
                              int id = keysUsedToReplaceDic[replaceString];
-@@ -199,6 +215,12 @@
+@@ -199,6 +297,12 @@
                      else
                      {
                          // Not a registered key, so simply write text
@@ -45,7 +148,7 @@ index df29ac8..da34c20 100644
                          // For every string we have to replace, we take another ingame value
                          string replaceString = keysUsedToReplace[stringsReplaced];
                          int id = keysUsedToReplaceDic[replaceString];
-@@ -234,6 +256,40 @@
+@@ -234,6 +338,40 @@
              Natives.SetMsgForLoadingScreen("INPUT_FRONTEND_REPLAY_CYCLEMARKERLEFT");
          }
  

@@ -62,6 +62,14 @@ lands on the Original Edition. `LCPDFR.log` records which was chosen, under `Tex
 Arrow keys and controller buttons already use the game's real `PAD_` icons and are not
 touched.
 
+Written key names are fixed text, whereas the game redraws its own input tokens for whichever
+device is in use. So a hint shown while on the keyboard kept its key names after switching to
+a controller, and a hint shown on a controller kept its button icons after switching back. The
+patch therefore remembers the help box's unformatted text and rebuilds it when the input
+device changes while it is still on screen, once the new device has held for 250 ms so a
+flickering reading cannot cause a flood of reprints. `KeyWatchDog.Update` calls this every
+tick, straight after reading the device. Each rebuild is logged under `TextHelper`.
+
 ### Peds in vehicles LCPDFR does not track
 
 `CPed.CurrentVehicle` looks the game's vehicle up in LCPDFR's own vehicle pool. On Complete
